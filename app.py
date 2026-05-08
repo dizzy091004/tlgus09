@@ -1,219 +1,257 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import os
-from datetime import datetime
-from PIL import Image
+import math
+import streamlit.components.v1 as components
 
 # ==========================================
-# 1. 초기 설정 및 데이터베이스 연결
+# 1. 초기 설정 및 테마 적용
 # ==========================================
 
-# 앱의 페이지 타이틀과 아이콘 설정
-st.set_page_config(page_title="에듀매니저: 학업 & 시간 관리", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="EduScience: 통합 과학 실험실", page_icon="🔬", layout="wide")
 
-# 이미지 업로드를 위한 폴더 생성 (없으면 생성)
-UPLOAD_DIR = "uploads"
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
-
-# 데이터베이스 연결 함수
-def get_connection():
-    # SQLite DB 파일을 생성하고 연결합니다.
-    conn = sqlite3.connect("study_data.db", check_same_thread=False)
-    return conn
-
-# 테이블 생성 (최초 실행 시)
-def init_db():
-    conn = get_connection()
-    c = conn.cursor()
-    # 1. 수행평가 테이블: 과목, 과제명, 비중, 마감일 저장
-    c.execute('''CREATE TABLE IF NOT EXISTS tasks 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  subject TEXT, title TEXT, weight REAL, deadline DATE)''')
-    # 2. 오답노트 테이블: 과목, 태그(유형), 이미지경로 저장
-    c.execute('''CREATE TABLE IF NOT EXISTS notes 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  subject TEXT, tag TEXT, img_path TEXT, created_at TIMESTAMP)''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ==========================================
-# 2. 핵심 로직: 우선순위 계산 알고리즘
-# ==========================================
-
-def calculate_priority(weight, deadline_str):
-    """
-    사용자가 요청한 '중요도(비중) × 남은 시간' 개념을 응용한 알고리즘입니다.
-    실제로는 마감일이 가까울수록 우선순위가 높아야 하므로 아래 공식을 사용합니다.
-    우선순위 점수 = (비중 * 10) / (남은 일수 + 1)
-    """
-    try:
-        deadline = datetime.strptime(deadline_str, '%Y-%m-%d').date()
-        today = datetime.now().date()
-        days_left = (deadline - today).days
-        
-        if days_left < 0:
-            return 0
-        
-        # 우선순위 점수 산출 (마감 임박 + 높은 비중 = 높은 점수)
-        priority_score = (weight * 10) / (days_left + 1)
-        return round(priority_score, 2)
-    except:
-        return 0
+# 프리미엄 디자인을 위한 커스텀 CSS 주입
+st.markdown("""
+    <style>
+    .stApp {
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        color: #f8fafc;
+    }
+    section[data-testid="stSidebar"] {
+        background-color: rgba(15, 23, 42, 0.95) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    div.stMetric, .stDataFrame, .stCodeBlock {
+        background-color: rgba(30, 41, 59, 0.7);
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+    h1, h2, h3, p, span {
+        color: #f8fafc !important;
+    }
+    .stButton>button {
+        background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 25px;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.5);
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. 사이드바 메뉴 구성
+# 2. 사이드바 메뉴 (통합 과학)
 # ==========================================
 
-st.sidebar.title("🎓 EduManager v1.0")
-menu = st.sidebar.radio("메뉴를 선택하세요", ["🏠 홈", "📅 수행평가 관리기", "📑 오답노트 스캔/분류"])
+st.sidebar.title("🔬 EduScience Lab")
+st.sidebar.markdown("---")
+menu = st.sidebar.radio(
+    "실험실 메뉴", 
+    [
+        "🏠 과학 실험실 홈", 
+        "🔭 물리학: 3D 포물선 운동", 
+        "🧪 화학: 원자 구조 시각화", 
+        "🧬 생명과학: DNA 3D 구조",
+        "🤖 AI 과학 튜터"
+    ]
+)
 
 # ==========================================
-# 4. 기능 구현: 홈 화면
+# 3. 기능 구현: 홈 화면
 # ==========================================
 
-if menu == "🏠 홈":
-    st.title("반갑습니다! 오늘을 최고의 하루로 만들어보세요. 🌟")
-    st.write("단어장 앱의 로직을 응용한 **학업 통합 관리 시스템**입니다.")
-    st.info("왼쪽 메뉴를 통해 기능을 선택해 주세요.")
-    
-    # 요약 정보 로드
-    conn = get_connection()
-    try:
-        task_count = pd.read_sql_query("SELECT COUNT(*) as count FROM tasks", conn)['count'][0]
-        note_count = pd.read_sql_query("SELECT COUNT(*) as count FROM notes", conn)['count'][0]
-    except:
-        task_count, note_count = 0, 0
-    conn.close()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("진행 중인 수행평가", f"{task_count}건")
-    with col2:
-        st.metric("저장된 오답노트", f"{note_count}개")
-    
-    st.divider()
-    st.subheader("💡 사용 팁")
+if menu == "🏠 과학 실험실 홈":
+    st.title("🔬 EduScience: 통합 과학 학습 플랫폼")
     st.markdown("""
-    1. **수행평가 관리기**: 과제 배점과 마감일을 입력하면 '무엇을 먼저 할지' 자동으로 계산해 줍니다.
-    2. **오답노트**: 틀린 문제 사진을 찍고 '실수 유형'을 태그로 달아보세요. 나중에 실수만 모아볼 수 있습니다.
-    """)
-
-# ==========================================
-# 5. 기능 구현: 수행평가 & 일정 통합 관리기
-# ==========================================
-
-elif menu == "📅 수행평가 관리기":
-    st.title("📅 수행평가 우선순위 관리")
+    ### 물리, 화학, 생명과학을 하나로!
+    이 앱은 고등학교 과학 교육과정의 핵심 개념들을 3D 시뮬레이션과 AI를 통해 탐구할 수 있도록 돕습니다.
     
-    with st.expander("➕ 새 수행평가 추가", expanded=False):
-        with st.form("task_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                subject = st.text_input("과목명", placeholder="예: 수학, 영어")
-                title = st.text_input("과제명", placeholder="예: 탐구 보고서")
-            with col2:
-                weight = st.number_input("반영 비중 (%)", min_value=1.0, max_value=100.0, value=10.0)
-                deadline = st.date_input("마감일")
-            
-            submit = st.form_submit_button("데이터베이스에 저장")
-            
-            if submit:
-                if subject and title:
-                    conn = get_connection()
-                    c = conn.cursor()
-                    c.execute("INSERT INTO tasks (subject, title, weight, deadline) VALUES (?, ?, ?, ?)", 
-                              (subject, title, weight, str(deadline)))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"'{title}' 과제가 추가되었습니다!")
-                else:
-                    st.error("과목명과 과제명을 입력해 주세요.")
-
-    st.divider()
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM tasks", conn)
-    conn.close()
-
-    if not df.empty:
-        df['우선순위 점수'] = df.apply(lambda row: calculate_priority(row['weight'], row['deadline']), axis=1)
-        df = df.sort_values(by='우선순위 점수', ascending=False)
-        
-        st.dataframe(df[['subject', 'title', 'weight', 'deadline', '우선순위 점수']], 
-                     use_container_width=True,
-                     column_config={
-                         "subject": "과목",
-                         "title": "과제명",
-                         "weight": "비중(%)",
-                         "deadline": "마감일",
-                         "우선순위 점수": st.column_config.ProgressColumn("시급도 (높을수록 먼저!)", min_value=0, max_value=100)
-                     })
-    else:
-        st.info("등록된 과제가 없습니다.")
+    #### 🚀 탐구 분야:
+    1. **🔭 물리학**: 3D 공간에서의 역학적 운동 분석.
+    2. **🧪 화학**: 눈에 보이지 않는 미시적 원자 세계 탐험.
+    3. **🧬 생명과학**: 생명의 설계도, DNA의 입체 구조 이해.
+    4. **🤖 AI 과학 튜터**: 질문을 통해 스스로 답을 찾아가는 과학적 사고 훈련.
+    """)
+    st.image("https://images.unsplash.com/photo-1532094349884-543bc11b234d?ixlib=rb-1.2.1&auto=format&fit=crop&w=1350&q=80", use_container_width=True)
 
 # ==========================================
-# 6. 기능 구현: 오답노트 스캔 & 분류기
+# 4. 기능 구현: 🔭 물리학 (포물선 운동)
 # ==========================================
 
-elif menu == "📑 오답노트 스캔/분류":
-    st.title("📑 스마트 오답노트")
+elif menu == "🔭 물리학: 3D 포물선 운동":
+    st.title("🔭 물리학 실험실: 3D 포물선 운동")
+    col1, col2, col3 = st.columns(3)
+    with col1: velocity = st.slider("초기 속도 (m/s)", 5, 50, 25)
+    with col2: angle = st.slider("발사 각도 (°)", 10, 80, 45)
+    with col3: gravity = st.slider("중력 가속도 (m/s²)", 1.0, 20.0, 9.8)
 
-    with st.expander("📸 새로운 오답 등록", expanded=False):
-        uploaded_file = st.file_uploader("문제 사진(JPG, PNG)을 선택하세요", type=['jpg', 'jpeg', 'png'])
-        col1, col2 = st.columns(2)
-        with col1:
-            note_subject = st.selectbox("과목 선택", ["수학", "영어", "국어", "과학", "사회", "기타"])
-        with col2:
-            note_tag = st.multiselect("유형 태그 선택", ["계산 실수", "개념 부족", "시간 부족", "문제 이해 불가", "단어 암기 미흡"])
-        
-        if st.button("오답노트에 업로드"):
-            if uploaded_file and note_subject:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                file_name = f"{timestamp}_{uploaded_file.name}"
-                file_path = os.path.join(UPLOAD_DIR, file_name)
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                
-                conn = get_connection()
-                c = conn.cursor()
-                c.execute("INSERT INTO notes (subject, tag, img_path, created_at) VALUES (?, ?, ?, ?)", 
-                          (note_subject, ",".join(note_tag), file_path, datetime.now()))
-                conn.commit()
-                conn.close()
-                st.success("성공적으로 저장되었습니다!")
-            else:
-                st.warning("사진과 과목을 확인해 주세요.")
+    rad = math.radians(angle)
+    vx, vy = velocity * math.cos(rad), velocity * math.sin(rad)
 
-    st.divider()
-    conn = get_connection()
-    notes_df = pd.read_sql_query("SELECT * FROM notes", conn)
-    conn.close()
+    three_js_physics = f"""
+    <div id="container" style="width: 100%; height: 500px; border-radius: 15px; background: #0f172a;"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/500, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({{antialias:true}});
+        renderer.setSize(window.innerWidth, 500);
+        document.getElementById('container').appendChild(renderer.domElement);
+        scene.add(new THREE.GridHelper(100, 20, 0x334155, 0x1e293b));
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), new THREE.MeshPhongMaterial({{color:0x3b82f6}}));
+        scene.add(sphere);
+        scene.add(new THREE.PointLight(0xffffff, 1, 100).clone().position.set(10, 10, 10));
+        scene.add(new THREE.AmbientLight(0x404040));
+        camera.position.set(20, 15, 40); camera.lookAt(0, 5, 0);
+        let t = 0;
+        function animate() {{
+            requestAnimationFrame(animate);
+            t += 0.05; const x = {vx}*t, y = {vy}*t - 0.5*{gravity}*t*t;
+            if (y >= 0) sphere.position.set(x, y, 0); else t = 0;
+            renderer.render(scene, camera);
+        }}
+        animate();
+    </script>
+    """
+    components.html(three_js_physics, height=520)
 
-    if not notes_df.empty:
-        filter_col1, filter_col2 = st.columns(2)
-        with filter_col1:
-            search_subject = st.multiselect("과목별로 보기", notes_df['subject'].unique())
-        with filter_col2:
-            all_tags = set()
-            for t in notes_df['tag'].str.split(','):
-                all_tags.update(t)
-            search_tag = st.multiselect("틀린 이유별로 보기", list(all_tags) if all_tags else [])
+# ==========================================
+# 5. 기능 구현: 🧪 화학 (원자 구조)
+# ==========================================
 
-        filtered_df = notes_df
-        if search_subject:
-            filtered_df = filtered_df[filtered_df['subject'].isin(search_subject)]
-        if search_tag:
-            filtered_df = filtered_df[filtered_df['tag'].apply(lambda x: any(tag in x for tag in search_tag))]
+elif menu == "🧪 화학: 원자 구조 시각화":
+    st.title("🧪 화학 실험실: 원자 구조 & 전자 배치")
+    element = st.selectbox("원소 선택", ["수소 (H)", "헬륨 (He)", "리튬 (Li)", "탄소 (C)", "산소 (O)"])
+    
+    # 원자 번호에 따른 전자 수 설정
+    atomic_data = {"수소 (H)": 1, "헬륨 (He)": 2, "리튬 (Li)": 3, "탄소 (C)": 6, "산소 (O)": 8}
+    electrons = atomic_data[element]
+    
+    st.write(f"**{element}** 원자의 3D 모델입니다. 중심의 원자핵과 주위를 도는 전자를 관찰해 보세요.")
 
-        if not filtered_df.empty:
-            cols = st.columns(3)
-            for i, (idx, row) in enumerate(filtered_df.iterrows()):
-                with cols[i % 3]:
-                    st.image(row['img_path'], caption=f"[{row['subject']}] {row['tag']}", use_container_width=True)
-        else:
-            st.warning("검색 결과가 없습니다.")
-    else:
-        st.info("기록된 오답이 없습니다.")
+    three_js_chem = f"""
+    <div id="container" style="width: 100%; height: 500px; border-radius: 15px; background: #0f172a;"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/500, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({{antialias:true}});
+        renderer.setSize(window.innerWidth, 500);
+        document.getElementById('container').appendChild(renderer.domElement);
+
+        // 원자핵
+        const nucleus = new THREE.Mesh(new THREE.SphereGeometry(1.5, 32, 32), new THREE.MeshPhongMaterial({{color:0xef4444}}));
+        scene.add(nucleus);
+
+        // 전자들 생성
+        const electronGroup = new THREE.Group();
+        for(let i=0; i<{electrons}; i++) {{
+            const e = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 16), new THREE.MeshPhongMaterial({{color:0xfde047}}));
+            const orbitSize = i < 2 ? 5 : 8; // 전자 껍질 레이어
+            e.position.x = orbitSize;
+            const pivot = new THREE.Group();
+            pivot.rotation.y = (Math.PI * 2 / {electrons}) * i;
+            pivot.rotation.x = Math.random() * Math.PI;
+            pivot.add(e);
+            electronGroup.add(pivot);
+        }}
+        scene.add(electronGroup);
+
+        scene.add(new THREE.PointLight(0xffffff, 1, 100).clone().position.set(10, 10, 10));
+        scene.add(new THREE.AmbientLight(0x404040));
+        camera.position.z = 15;
+
+        function animate() {{
+            requestAnimationFrame(animate);
+            electronGroup.children.forEach((pivot, idx) => {{
+                pivot.rotation.y += 0.02 + (idx * 0.005);
+                pivot.rotation.z += 0.01;
+            }});
+            renderer.render(scene, camera);
+        }}
+        animate();
+    </script>
+    """
+    components.html(three_js_chem, height=520)
+
+# ==========================================
+# 6. 기능 구현: 🧬 생명과학 (DNA)
+# ==========================================
+
+elif menu == "🧬 생명과학: DNA 3D 구조":
+    st.title("🧬 생명과학 실험실: DNA 이중 나선")
+    st.write("생명체의 설계도인 DNA의 이중 나선 구조를 3D로 탐사합니다.")
+    
+    three_js_bio = f"""
+    <div id="container" style="width: 100%; height: 500px; border-radius: 15px; background: #0f172a;"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/500, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({{antialias:true}});
+        renderer.setSize(window.innerWidth, 500);
+        document.getElementById('container').appendChild(renderer.domElement);
+
+        const dnaGroup = new THREE.Group();
+        for(let i=0; i<40; i++) {{
+            const y = (i - 20) * 0.8;
+            const angle = i * 0.4;
+            
+            // 두 가닥의 인산-당 골격
+            const s1 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), new THREE.MeshPhongMaterial({{color:0x10b981}}));
+            s1.position.set(Math.cos(angle)*4, y, Math.sin(angle)*4);
+            
+            const s2 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), new THREE.MeshPhongMaterial({{color:0x10b981}}));
+            s2.position.set(Math.cos(angle + Math.PI)*4, y, Math.sin(angle + Math.PI)*4);
+            
+            // 염기 쌍 (연결선)
+            const lineGeom = new THREE.BufferGeometry().setFromPoints([s1.position, s2.position]);
+            const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({{color:0x64748b}}));
+            
+            dnaGroup.add(s1); dnaGroup.add(s2); dnaGroup.add(line);
+        }}
+        scene.add(dnaGroup);
+
+        scene.add(new THREE.PointLight(0xffffff, 1, 100).clone().position.set(10, 10, 10));
+        scene.add(new THREE.AmbientLight(0x404040));
+        camera.position.set(0, 0, 25);
+
+        function animate() {{
+            requestAnimationFrame(animate);
+            dnaGroup.rotation.y += 0.01;
+            renderer.render(scene, camera);
+        }}
+        animate();
+    </script>
+    """
+    components.html(three_js_bio, height=520)
+
+# ==========================================
+# 7. 기능 구현: 🤖 AI 과학 튜터
+# ==========================================
+
+elif menu == "🤖 AI 과학 튜터":
+    st.title("🤖 AI 통합 과학 튜터")
+    st.info("💡 물리, 화학, 생명과학에 대한 질문을 남겨주세요. 원리를 깨우칠 수 있도록 돕겠습니다.")
+    
+    if "sci_messages" not in st.session_state: st.session_state.sci_messages = []
+    for msg in st.session_state.sci_messages:
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
+
+    if prompt := st.chat_input("질문을 입력하세요 (예: 미토콘드리아의 역할은 무엇인가요?)"):
+        st.session_state.sci_messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("assistant"):
+            response = f"'{prompt}'에 대해 함께 알아봅시다. "
+            if "세포" in prompt or "DNA" in prompt: response += "생명체의 기본 단위인 세포 내에서 해당 구조가 어떤 기능을 수행하는지 떠올려 볼까요?"
+            elif "원자" in prompt or "반응" in prompt: response += "화학적 결합과 전자 배치의 관점에서 접근해 보는 것은 어떨까요?"
+            else: response += "이 현상의 핵심적인 과학적 원리가 무엇인지 먼저 정의해 보는 것이 좋겠네요."
+            st.markdown(response)
+            st.session_state.sci_messages.append({"role": "assistant", "content": response})
